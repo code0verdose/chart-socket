@@ -9,12 +9,15 @@ interface PriceChartProps {
   data: PriceData[]
 }
 
+// How many seconds of data to show on screen
+const VISIBLE_RANGE_SECONDS = 30
+
 export function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const lastDataLengthRef = useRef<number>(0)
   const isInitializedRef = useRef<boolean>(false)
+  const visibleFromRef = useRef<number>(0)
   const [dotPosition, setDotPosition] = useState<{ x: number; y: number } | null>(null)
 
   const initChart = useCallback(() => {
@@ -60,7 +63,8 @@ export function PriceChart({ data }: PriceChartProps) {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: true,
-        rightOffset: 8,
+        rightOffset: 5,
+        lockVisibleTimeRangeOnResize: true,
         tickMarkFormatter: (time: Time) => {
           const date = new Date((time as number) * 1000)
           return date.toLocaleTimeString('en-US', {
@@ -114,7 +118,6 @@ export function PriceChart({ data }: PriceChartProps) {
         seriesRef.current = null
       }
       isInitializedRef.current = false
-      lastDataLengthRef.current = 0
     }
   }, [initChart])
 
@@ -123,34 +126,42 @@ export function PriceChart({ data }: PriceChartProps) {
     if (!seriesRef.current || !chartRef.current || data.length === 0) return
 
     const lastPoint = data[data.length - 1]
+    const timeScale = chartRef.current.timeScale()
 
     if (!isInitializedRef.current) {
-      // First time - set all data
+      // First time - set all historical data
       const chartData: LineData<Time>[] = data.map(d => ({
         time: d.time as Time,
         value: d.value,
       }))
       seriesRef.current.setData(chartData)
       isInitializedRef.current = true
-      lastDataLengthRef.current = data.length
-    } else if (data.length > lastDataLengthRef.current) {
-      // New point added
+      
+      // Set initial visible range
+      visibleFromRef.current = lastPoint.time - VISIBLE_RANGE_SECONDS
+      timeScale.setVisibleRange({
+        from: visibleFromRef.current as Time,
+        to: (lastPoint.time + 2) as Time,
+      })
+    } else {
+      // After init - use update()
       seriesRef.current.update({
         time: lastPoint.time as Time,
         value: lastPoint.value,
       })
-      lastDataLengthRef.current = data.length
-      chartRef.current.timeScale().scrollToRealTime()
-    } else {
-      // Same number of points - just update last value
-      seriesRef.current.update({
-        time: lastPoint.time as Time,
-        value: lastPoint.value,
+      
+      // Smoothly interpolate visible range (very smooth easing)
+      const targetFrom = lastPoint.time - VISIBLE_RANGE_SECONDS
+      const diff = targetFrom - visibleFromRef.current
+      visibleFromRef.current += diff * 0.02 // Very smooth easing
+      
+      timeScale.setVisibleRange({
+        from: visibleFromRef.current as Time,
+        to: (visibleFromRef.current + VISIBLE_RANGE_SECONDS + 2) as Time,
       })
     }
 
     // Update dot position
-    const timeScale = chartRef.current.timeScale()
     const x = timeScale.timeToCoordinate(lastPoint.time as Time)
     const y = seriesRef.current.priceToCoordinate(lastPoint.value)
     
