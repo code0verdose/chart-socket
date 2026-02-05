@@ -11,8 +11,12 @@ interface UsePriceStreamReturn {
   isConnected: boolean
 }
 
-// Throttle interval for adding new data points (ms)
-const DATA_POINT_INTERVAL = 400
+// How often to add NEW points (ms) - should match socket interval
+const NEW_POINT_INTERVAL = 1000
+// How often to update the last point's value for smooth price transitions (ms)
+const VALUE_UPDATE_INTERVAL = 50
+// Smoothing factor for price interpolation
+const SMOOTHING = 0.1
 
 export function usePriceStream(): UsePriceStreamReturn {
   const [priceHistory, setPriceHistory] = useState<PriceData[]>([])
@@ -21,71 +25,110 @@ export function usePriceStream(): UsePriceStreamReturn {
   const [isConnected, setIsConnected] = useState(false)
   
   const dataRef = useRef<PriceData[]>([])
-  const lastAddTimeRef = useRef<number>(0)
-  const rafIdRef = useRef<number | null>(null)
-  const pendingUpdateRef = useRef<{ price: PriceData; ticker: TickerInfo } | null>(null)
+  const targetPriceRef = useRef<number>(84.65)
+  const displayPriceRef = useRef<number>(84.65)
+  const valueUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const newPointIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const isInitializedRef = useRef<boolean>(false)
+  const currentTimeRef = useRef<number>(0)
 
-  const scheduleUpdate = useCallback(() => {
-    if (rafIdRef.current !== null) return
-
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null
-      
-      const pending = pendingUpdateRef.current
-      if (!pending) return
-
-      const { price, ticker } = pending
-      const now = Date.now()
-      
-      // Add new point only if enough time has passed
-      if (now - lastAddTimeRef.current >= DATA_POINT_INTERVAL) {
-        lastAddTimeRef.current = now
-        
-        // Add new data point
-        dataRef.current = [...dataRef.current, price].slice(-400)
-        setPriceHistory([...dataRef.current])
-      } else if (dataRef.current.length > 0) {
-        // Update the last point's value for smooth animation
-        const lastIndex = dataRef.current.length - 1
-        dataRef.current[lastIndex] = {
-          ...dataRef.current[lastIndex],
-          value: price.value,
-        }
-        setPriceHistory([...dataRef.current])
-      }
-
-      setLatestPrice(price)
-      setTickerInfo(ticker)
-    })
-  }, [])
-
+  // Handle incoming price updates from socket
   const handleMessage = useCallback((message: { type: string; data: PriceData; ticker: TickerInfo }) => {
     if (message.type === 'price_update') {
-      pendingUpdateRef.current = { price: message.data, ticker: message.ticker }
-      scheduleUpdate()
+      if (!isInitializedRef.current) {
+        // Initial historical data
+        dataRef.current = [...dataRef.current, message.data]
+        displayPriceRef.current = message.data.value
+        targetPriceRef.current = message.data.value
+        currentTimeRef.current = message.data.time
+        setPriceHistory([...dataRef.current])
+      } else {
+        // New target price
+        targetPriceRef.current = message.data.value
+      }
+      
+      setTickerInfo(message.ticker)
     }
-  }, [scheduleUpdate])
+  }, [])
+
+  const startUpdateLoops = useCallback(() => {
+    if (valueUpdateIntervalRef.current) return
+
+    isInitializedRef.current = true
+    
+    // Get starting time from last data point
+    if (dataRef.current.length > 0) {
+      currentTimeRef.current = dataRef.current[dataRef.current.length - 1].time
+    }
+
+    // Loop 1: Update last point's VALUE frequently for smooth price changes
+    valueUpdateIntervalRef.current = setInterval(() => {
+      if (dataRef.current.length === 0) return
+
+      // Interpolate price
+      const diff = targetPriceRef.current - displayPriceRef.current
+      if (Math.abs(diff) > 0.001) {
+        displayPriceRef.current += diff * SMOOTHING
+      }
+
+      // Update last point's value only
+      const lastIndex = dataRef.current.length - 1
+      dataRef.current[lastIndex] = {
+        ...dataRef.current[lastIndex],
+        value: parseFloat(displayPriceRef.current.toFixed(3)),
+      }
+
+      setPriceHistory([...dataRef.current])
+      setLatestPrice(dataRef.current[lastIndex])
+    }, VALUE_UPDATE_INTERVAL)
+
+    // Loop 2: Add NEW points less frequently for steady horizontal movement
+    newPointIntervalRef.current = setInterval(() => {
+      currentTimeRef.current += NEW_POINT_INTERVAL / 1000
+
+      const newPoint: PriceData = {
+        time: currentTimeRef.current,
+        value: parseFloat(displayPriceRef.current.toFixed(3)),
+      }
+
+      dataRef.current = [...dataRef.current, newPoint].slice(-200)
+      setPriceHistory([...dataRef.current])
+      setLatestPrice(newPoint)
+    }, NEW_POINT_INTERVAL)
+  }, [])
 
   useEffect(() => {
-    const connectAndSubscribe = () => {
+    const connect = () => {
       mockWebSocket.connect()
       setIsConnected(true)
     }
-
-    connectAndSubscribe()
+    
+    connect()
     const unsubscribe = mockWebSocket.subscribe(handleMessage)
+    
+    const startTimer = setTimeout(() => {
+      startUpdateLoops()
+    }, 300)
 
     return () => {
+      clearTimeout(startTimer)
       unsubscribe()
       mockWebSocket.disconnect()
       setIsConnected(false)
-      dataRef.current = []
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current)
-        rafIdRef.current = null
+      
+      if (valueUpdateIntervalRef.current) {
+        clearInterval(valueUpdateIntervalRef.current)
+        valueUpdateIntervalRef.current = null
       }
+      if (newPointIntervalRef.current) {
+        clearInterval(newPointIntervalRef.current)
+        newPointIntervalRef.current = null
+      }
+      
+      dataRef.current = []
+      isInitializedRef.current = false
     }
-  }, [handleMessage])
+  }, [handleMessage, startUpdateLoops])
 
   return {
     priceHistory,

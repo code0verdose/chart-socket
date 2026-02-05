@@ -13,8 +13,8 @@ export function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const isInitializedRef = useRef<boolean>(false)
   const lastDataLengthRef = useRef<number>(0)
+  const isInitializedRef = useRef<boolean>(false)
   const [dotPosition, setDotPosition] = useState<{ x: number; y: number } | null>(null)
 
   const initChart = useCallback(() => {
@@ -60,7 +60,7 @@ export function PriceChart({ data }: PriceChartProps) {
         borderVisible: false,
         timeVisible: true,
         secondsVisible: true,
-        rightOffset: 5,
+        rightOffset: 8,
         tickMarkFormatter: (time: Time) => {
           const date = new Date((time as number) * 1000)
           return date.toLocaleTimeString('en-US', {
@@ -124,8 +124,8 @@ export function PriceChart({ data }: PriceChartProps) {
 
     const lastPoint = data[data.length - 1]
 
-    // Initial load - set all data once
     if (!isInitializedRef.current) {
+      // First time - set all data
       const chartData: LineData<Time>[] = data.map(d => ({
         time: d.time as Time,
         value: d.value,
@@ -134,14 +134,15 @@ export function PriceChart({ data }: PriceChartProps) {
       isInitializedRef.current = true
       lastDataLengthRef.current = data.length
     } else if (data.length > lastDataLengthRef.current) {
-      // New point added - use update to add it smoothly
+      // New point added
       seriesRef.current.update({
         time: lastPoint.time as Time,
         value: lastPoint.value,
       })
       lastDataLengthRef.current = data.length
+      chartRef.current.timeScale().scrollToRealTime()
     } else {
-      // Same length - just update the last point's value
+      // Same number of points - just update last value
       seriesRef.current.update({
         time: lastPoint.time as Time,
         value: lastPoint.value,
@@ -156,8 +157,6 @@ export function PriceChart({ data }: PriceChartProps) {
     if (x !== null && y !== null) {
       setDotPosition({ x, y })
     }
-
-    chartRef.current.timeScale().scrollToRealTime()
   }, [data])
 
   return (
@@ -171,7 +170,6 @@ export function PriceChart({ data }: PriceChartProps) {
             left: dotPosition.x,
             top: dotPosition.y,
             transform: 'translate(-50%, -50%)',
-            transition: 'left 400ms linear',
           }}
         >
           <div className="absolute inset-0 rounded-full bg-purple-500/30 animate-ping" />
