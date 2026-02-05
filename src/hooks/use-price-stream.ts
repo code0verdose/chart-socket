@@ -11,12 +11,12 @@ interface UsePriceStreamReturn {
   isConnected: boolean
 }
 
-// 30fps for smooth animation
-const FRAME_INTERVAL = 33
-// Extremely slow time step
-const TIME_STEP = 0.001
-// Very smooth price interpolation (lower = smoother transitions)
-const SMOOTHING = 0.015
+// Chart time moves at this rate (seconds per real second)
+const TIME_SPEED = 0.1
+// How smoothly price changes (higher = faster catch up)
+const PRICE_SMOOTHING = 0.04
+// Add a new fixed point every N seconds of chart time
+const POINT_INTERVAL = 0.05
 
 export function usePriceStream(): UsePriceStreamReturn {
   const [priceHistory, setPriceHistory] = useState<PriceData[]>([])
@@ -27,95 +27,84 @@ export function usePriceStream(): UsePriceStreamReturn {
   const dataRef = useRef<PriceData[]>([])
   const targetPriceRef = useRef<number>(84.65)
   const displayPriceRef = useRef<number>(84.65)
+  const currentTimeRef = useRef<number>(0)
+  const lastPointTimeRef = useRef<number>(0)
+  const lastFrameTimeRef = useRef<number>(0)
   const animationRef = useRef<number | null>(null)
   const isInitializedRef = useRef<boolean>(false)
-  const currentTimeRef = useRef<number>(0)
-  const lastFrameTimeRef = useRef<number>(0)
 
   useEffect(() => {
-    // Handle incoming price updates from socket
+    const animate = (timestamp: number) => {
+      // Calculate delta time
+      if (lastFrameTimeRef.current === 0) {
+        lastFrameTimeRef.current = timestamp
+      }
+      const deltaTime = (timestamp - lastFrameTimeRef.current) / 1000
+      lastFrameTimeRef.current = timestamp
+
+      // Smooth price interpolation
+      const priceDiff = targetPriceRef.current - displayPriceRef.current
+      displayPriceRef.current += priceDiff * PRICE_SMOOTHING
+
+      // Advance time smoothly
+      currentTimeRef.current += deltaTime * TIME_SPEED
+
+      // Check if we need to add a new fixed point
+      const timeSinceLastPoint = currentTimeRef.current - lastPointTimeRef.current
+      
+      if (timeSinceLastPoint >= POINT_INTERVAL) {
+        // Add new fixed point
+        const newPoint: PriceData = {
+          time: currentTimeRef.current,
+          value: displayPriceRef.current,
+        }
+        dataRef.current = [...dataRef.current.slice(-199), newPoint]
+        lastPointTimeRef.current = currentTimeRef.current
+      }
+
+      // Always update the "live" point (last point moves smoothly)
+      const livePoint: PriceData = {
+        time: currentTimeRef.current,
+        value: displayPriceRef.current,
+      }
+
+      // Combine fixed points with live point
+      const historyWithLive = [...dataRef.current.slice(0, -1), livePoint]
+      
+      setPriceHistory(historyWithLive)
+      setLatestPrice(livePoint)
+
+      animationRef.current = requestAnimationFrame(animate)
+    }
+
     const handleMessage = (message: { type: string; data: PriceData; ticker: TickerInfo }) => {
       if (message.type === 'price_update') {
         if (!isInitializedRef.current) {
-          // Initial historical data
-          dataRef.current = [...dataRef.current, message.data]
+          // Initialize with first data point
+          dataRef.current = [message.data]
           displayPriceRef.current = message.data.value
           targetPriceRef.current = message.data.value
           currentTimeRef.current = message.data.time
-          setPriceHistory([...dataRef.current])
+          lastPointTimeRef.current = message.data.time
+          isInitializedRef.current = true
+          
+          // Start animation loop
+          animationRef.current = requestAnimationFrame(animate)
         } else {
-          // New target price from socket
+          // Just update target price
           targetPriceRef.current = message.data.value
         }
-        
         setTickerInfo(message.ticker)
       }
     }
 
-    // Animation loop
-    const animate = (timestamp: number) => {
-      if (!isInitializedRef.current) {
-        animationRef.current = requestAnimationFrame(animate)
-        return
-      }
-
-      // Throttle to ~30fps
-      if (timestamp - lastFrameTimeRef.current < FRAME_INTERVAL) {
-        animationRef.current = requestAnimationFrame(animate)
-        return
-      }
-      lastFrameTimeRef.current = timestamp
-
-      // Smooth price interpolation
-      const diff = targetPriceRef.current - displayPriceRef.current
-      if (Math.abs(diff) > 0.0005) {
-        displayPriceRef.current += diff * SMOOTHING
-      } else {
-        displayPriceRef.current = targetPriceRef.current
-      }
-
-      // Advance time by small fixed step
-      currentTimeRef.current += TIME_STEP
-
-      // Add new point
-      const newPoint: PriceData = {
-        time: currentTimeRef.current,
-        value: parseFloat(displayPriceRef.current.toFixed(3)),
-      }
-
-      dataRef.current = [...dataRef.current, newPoint].slice(-600)
-      
-      setPriceHistory([...dataRef.current])
-      setLatestPrice(newPoint)
-
-      animationRef.current = requestAnimationFrame(animate)
-    }
-
-    // Start animation
-    const startAnimation = () => {
-      isInitializedRef.current = true
-      
-      if (dataRef.current.length > 0) {
-        currentTimeRef.current = dataRef.current[dataRef.current.length - 1].time
-      }
-
-      lastFrameTimeRef.current = performance.now()
-      animationRef.current = requestAnimationFrame(animate)
-    }
-
-    // Connect and subscribe
-    const connect = () => {
-      mockWebSocket.connect()
+    mockWebSocket.connect()
+    const unsubscribe = mockWebSocket.subscribe((message) => {
       setIsConnected(true)
-    }
-    connect()
-    const unsubscribe = mockWebSocket.subscribe(handleMessage)
-    
-    // Start animation after initial data loads
-    const startTimer = setTimeout(startAnimation, 200)
+      handleMessage(message)
+    })
 
     return () => {
-      clearTimeout(startTimer)
       unsubscribe()
       mockWebSocket.disconnect()
       setIsConnected(false)
@@ -127,6 +116,7 @@ export function usePriceStream(): UsePriceStreamReturn {
       
       dataRef.current = []
       isInitializedRef.current = false
+      lastFrameTimeRef.current = 0
     }
   }, [])
 

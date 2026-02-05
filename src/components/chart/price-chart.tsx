@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { createChart, LineSeries, LineStyle, LineType } from 'lightweight-charts'
-import type { IChartApi, ISeriesApi, LineData, Time } from 'lightweight-charts'
+import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts'
 import type { PriceData } from '@/types/chart'
 
 interface PriceChartProps {
@@ -16,8 +16,7 @@ export function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const isInitializedRef = useRef<boolean>(false)
-  const visibleFromRef = useRef<number>(0)
+  const lastTimeRef = useRef<number>(0)
   const [dotPosition, setDotPosition] = useState<{ x: number; y: number } | null>(null)
 
   const initChart = useCallback(() => {
@@ -55,8 +54,8 @@ export function PriceChart({ data }: PriceChartProps) {
       rightPriceScale: {
         borderVisible: false,
         scaleMargins: {
-          top: 0.3,
-          bottom: 0.3,
+          top: 0.2,
+          bottom: 0.2,
         },
       },
       timeScale: {
@@ -64,7 +63,6 @@ export function PriceChart({ data }: PriceChartProps) {
         timeVisible: true,
         secondsVisible: true,
         rightOffset: 5,
-        lockVisibleTimeRangeOnResize: true,
         tickMarkFormatter: (time: Time) => {
           const date = new Date((time as number) * 1000)
           return date.toLocaleTimeString('en-US', {
@@ -80,7 +78,7 @@ export function PriceChart({ data }: PriceChartProps) {
     })
 
     const lineSeries = chart.addSeries(LineSeries, {
-      color: '#a855f7',
+      color: '#f59e0b',
       lineWidth: 2,
       lineType: LineType.Curved,
       crosshairMarkerVisible: false,
@@ -117,7 +115,7 @@ export function PriceChart({ data }: PriceChartProps) {
         chartRef.current = null
         seriesRef.current = null
       }
-      isInitializedRef.current = false
+      lastTimeRef.current = 0
     }
   }, [initChart])
 
@@ -126,40 +124,22 @@ export function PriceChart({ data }: PriceChartProps) {
     if (!seriesRef.current || !chartRef.current || data.length === 0) return
 
     const lastPoint = data[data.length - 1]
-    const timeScale = chartRef.current.timeScale()
 
-    if (!isInitializedRef.current) {
-      // First time - set all historical data
-      const chartData: LineData<Time>[] = data.map(d => ({
-        time: d.time as Time,
-        value: d.value,
-      }))
-      seriesRef.current.setData(chartData)
-      isInitializedRef.current = true
-      
-      // Set initial visible range
-      visibleFromRef.current = lastPoint.time - VISIBLE_RANGE_SECONDS
-      timeScale.setVisibleRange({
-        from: visibleFromRef.current as Time,
-        to: (lastPoint.time + 2) as Time,
-      })
-    } else {
-      // After init - use update()
+    // Only update if time has changed
+    if (lastPoint.time > lastTimeRef.current) {
       seriesRef.current.update({
         time: lastPoint.time as Time,
         value: lastPoint.value,
       })
-      
-      // Smoothly interpolate visible range (very smooth easing)
-      const targetFrom = lastPoint.time - VISIBLE_RANGE_SECONDS
-      const diff = targetFrom - visibleFromRef.current
-      visibleFromRef.current += diff * 0.02 // Very smooth easing
-      
-      timeScale.setVisibleRange({
-        from: visibleFromRef.current as Time,
-        to: (visibleFromRef.current + VISIBLE_RANGE_SECONDS + 2) as Time,
-      })
+      lastTimeRef.current = lastPoint.time
     }
+
+    // Set visible range
+    const timeScale = chartRef.current.timeScale()
+    timeScale.setVisibleRange({
+      from: (lastPoint.time - VISIBLE_RANGE_SECONDS) as Time,
+      to: (lastPoint.time + 2) as Time,
+    })
 
     // Update dot position
     const x = timeScale.timeToCoordinate(lastPoint.time as Time)
@@ -176,16 +156,16 @@ export function PriceChart({ data }: PriceChartProps) {
       
       {dotPosition && (
         <div
-          className="absolute pointer-events-none w-6 h-6"
+          className="absolute pointer-events-none w-5 h-5"
           style={{
             left: dotPosition.x,
             top: dotPosition.y,
             transform: 'translate(-50%, -50%)',
           }}
         >
-          <div className="absolute inset-0 rounded-full bg-purple-500/30 animate-ping" />
-          <div className="absolute inset-1 rounded-full bg-purple-500/50 animate-pulse" />
-          <div className="absolute inset-1.5 rounded-full bg-purple-500 border-2 border-purple-300 shadow-lg shadow-purple-500/50" />
+          <div className="absolute inset-0 rounded-full bg-orange-500/30 animate-ping" />
+          <div className="absolute inset-0.5 rounded-full bg-orange-500/50 animate-pulse" />
+          <div className="absolute inset-1 rounded-full bg-orange-500 border-2 border-orange-300" />
         </div>
       )}
     </div>
