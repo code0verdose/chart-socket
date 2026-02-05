@@ -171,7 +171,7 @@ export function PriceChart({ data }: PriceChartProps) {
             left: dotPosition.x,
             top: dotPosition.y,
             transform: 'translate(-50%, -50%)',
-            transition: 'left 400ms linear, top 400ms linear',
+            transition: 'left 400ms linear',
           }}
         >
           <div className="absolute inset-0 rounded-full bg-purple-500/30 animate-ping" />
