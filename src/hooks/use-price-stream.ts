@@ -11,16 +11,20 @@ interface UsePriceStreamReturn {
   isConnected: boolean
 }
 
+// Throttle interval for adding new data points (ms)
+const DATA_POINT_INTERVAL = 400
+
 export function usePriceStream(): UsePriceStreamReturn {
   const [priceHistory, setPriceHistory] = useState<PriceData[]>([])
   const [latestPrice, setLatestPrice] = useState<PriceData | null>(null)
   const [tickerInfo, setTickerInfo] = useState<TickerInfo | null>(null)
   const [isConnected, setIsConnected] = useState(false)
-  const priceMapRef = useRef<Map<number, PriceData>>(new Map())
+  
+  const dataRef = useRef<PriceData[]>([])
+  const lastAddTimeRef = useRef<number>(0)
   const rafIdRef = useRef<number | null>(null)
   const pendingUpdateRef = useRef<{ price: PriceData; ticker: TickerInfo } | null>(null)
 
-  // Throttled update using RAF
   const scheduleUpdate = useCallback(() => {
     if (rafIdRef.current !== null) return
 
@@ -31,22 +35,25 @@ export function usePriceStream(): UsePriceStreamReturn {
       if (!pending) return
 
       const { price, ticker } = pending
+      const now = Date.now()
       
-      // Update map
-      priceMapRef.current.set(price.time, price)
-
-      // Keep only last 300 points
-      if (priceMapRef.current.size > 300) {
-        const sortedKeys = Array.from(priceMapRef.current.keys()).sort((a, b) => a - b)
-        const keysToDelete = sortedKeys.slice(0, sortedKeys.length - 300)
-        keysToDelete.forEach(key => priceMapRef.current.delete(key))
+      // Add new point only if enough time has passed
+      if (now - lastAddTimeRef.current >= DATA_POINT_INTERVAL) {
+        lastAddTimeRef.current = now
+        
+        // Add new data point
+        dataRef.current = [...dataRef.current, price].slice(-400)
+        setPriceHistory([...dataRef.current])
+      } else if (dataRef.current.length > 0) {
+        // Update the last point's value for smooth animation
+        const lastIndex = dataRef.current.length - 1
+        dataRef.current[lastIndex] = {
+          ...dataRef.current[lastIndex],
+          value: price.value,
+        }
+        setPriceHistory([...dataRef.current])
       }
 
-      // Convert to sorted array
-      const sortedData = Array.from(priceMapRef.current.values())
-        .sort((a, b) => a.time - b.time)
-
-      setPriceHistory(sortedData)
       setLatestPrice(price)
       setTickerInfo(ticker)
     })
@@ -60,8 +67,6 @@ export function usePriceStream(): UsePriceStreamReturn {
   }, [scheduleUpdate])
 
   useEffect(() => {
-    const priceMap = priceMapRef.current
-
     const connectAndSubscribe = () => {
       mockWebSocket.connect()
       setIsConnected(true)
@@ -74,7 +79,7 @@ export function usePriceStream(): UsePriceStreamReturn {
       unsubscribe()
       mockWebSocket.disconnect()
       setIsConnected(false)
-      priceMap.clear()
+      dataRef.current = []
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current)
         rafIdRef.current = null

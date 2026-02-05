@@ -13,8 +13,8 @@ export function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
-  const lastDataLengthRef = useRef<number>(0)
   const isInitializedRef = useRef<boolean>(false)
+  const lastDataLengthRef = useRef<number>(0)
   const [dotPosition, setDotPosition] = useState<{ x: number; y: number } | null>(null)
 
   const initChart = useCallback(() => {
@@ -75,7 +75,6 @@ export function PriceChart({ data }: PriceChartProps) {
       handleScroll: false,
     })
 
-    // Main price line - curved for smooth appearance
     const lineSeries = chart.addSeries(LineSeries, {
       color: '#a855f7',
       lineWidth: 2,
@@ -88,7 +87,6 @@ export function PriceChart({ data }: PriceChartProps) {
     chartRef.current = chart
     seriesRef.current = lineSeries
 
-    // Handle resize
     const handleResize = () => {
       if (containerRef.current && chartRef.current) {
         chartRef.current.applyOptions({
@@ -106,7 +104,6 @@ export function PriceChart({ data }: PriceChartProps) {
     }
   }, [])
 
-  // Initialize chart
   useEffect(() => {
     const cleanup = initChart()
     return () => {
@@ -121,52 +118,43 @@ export function PriceChart({ data }: PriceChartProps) {
     }
   }, [initChart])
 
-  // Update data - use update() for incremental changes
+  // Update chart data
   useEffect(() => {
     if (!seriesRef.current || !chartRef.current || data.length === 0) return
 
     const lastPoint = data[data.length - 1]
-    
-    // Initial load or significant data change - use setData
-    if (!isInitializedRef.current || data.length < lastDataLengthRef.current) {
-      const uniqueData = data.reduce<PriceData[]>((acc, curr) => {
-        const existingIndex = acc.findIndex(item => item.time === curr.time)
-        if (existingIndex >= 0) {
-          acc[existingIndex] = curr
-        } else {
-          acc.push(curr)
-        }
-        return acc
-      }, [])
 
-      uniqueData.sort((a, b) => a.time - b.time)
-
-      const chartData: LineData<Time>[] = uniqueData.map(d => ({
+    // Initial load - set all data once
+    if (!isInitializedRef.current) {
+      const chartData: LineData<Time>[] = data.map(d => ({
         time: d.time as Time,
         value: d.value,
       }))
-
       seriesRef.current.setData(chartData)
       isInitializedRef.current = true
+      lastDataLengthRef.current = data.length
+    } else if (data.length > lastDataLengthRef.current) {
+      // New point added - use update to add it smoothly
+      seriesRef.current.update({
+        time: lastPoint.time as Time,
+        value: lastPoint.value,
+      })
+      lastDataLengthRef.current = data.length
     } else {
-      // Incremental update - just update the last point
+      // Same length - just update the last point's value
       seriesRef.current.update({
         time: lastPoint.time as Time,
         value: lastPoint.value,
       })
     }
 
-    lastDataLengthRef.current = data.length
-
     // Update dot position
-    if (lastPoint) {
-      const timeScale = chartRef.current.timeScale()
-      const x = timeScale.timeToCoordinate(lastPoint.time as Time)
-      const y = seriesRef.current.priceToCoordinate(lastPoint.value)
-      
-      if (x !== null && y !== null) {
-        setDotPosition({ x, y })
-      }
+    const timeScale = chartRef.current.timeScale()
+    const x = timeScale.timeToCoordinate(lastPoint.time as Time)
+    const y = seriesRef.current.priceToCoordinate(lastPoint.value)
+    
+    if (x !== null && y !== null) {
+      setDotPosition({ x, y })
     }
 
     chartRef.current.timeScale().scrollToRealTime()
@@ -176,21 +164,18 @@ export function PriceChart({ data }: PriceChartProps) {
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       
-      {/* Animated pulsing dot at the end of the line */}
       {dotPosition && (
         <div
-          className="absolute pointer-events-none w-6 h-6 transition-all duration-100 ease-linear"
+          className="absolute pointer-events-none w-6 h-6"
           style={{
-            left: `${dotPosition.x}px`,
-            top: `${dotPosition.y}px`,
+            left: dotPosition.x,
+            top: dotPosition.y,
             transform: 'translate(-50%, -50%)',
+            transition: 'left 400ms linear, top 400ms linear',
           }}
         >
-          {/* Outer pulsing ring */}
           <div className="absolute inset-0 rounded-full bg-purple-500/30 animate-ping" />
-          {/* Middle glow */}
           <div className="absolute inset-1 rounded-full bg-purple-500/50 animate-pulse" />
-          {/* Inner solid dot */}
           <div className="absolute inset-1.5 rounded-full bg-purple-500 border-2 border-purple-300 shadow-lg shadow-purple-500/50" />
         </div>
       )}

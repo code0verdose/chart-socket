@@ -13,8 +13,8 @@ class MockWebSocketService {
   private priceChangeTimer: number = 0
   
   // Settings
-  private readonly SMOOTHING = 0.02 // Lower = smoother (0.01-0.05)
-  private readonly PRICE_CHANGE_INTERVAL = 1500 // ms between target price changes
+  private readonly SMOOTHING = 0.015
+  private readonly PRICE_CHANGE_INTERVAL = 2000
 
   connect() {
     if (this.isRunning) return
@@ -47,22 +47,23 @@ class MockWebSocketService {
 
   private generateHistoricalData() {
     const now = Date.now()
-    const historicalPoints = 150
+    const historicalPoints = 200
     let historicalPrice = 84.65
-
+    
+    // Generate points every 100ms for smooth history
     for (let i = historicalPoints; i >= 0; i--) {
       const time = now - i * 100
 
-      // Gentle random walk for history
-      if (Math.random() > 0.3) {
-        const randomWalk = (Math.random() - 0.5) * 0.015
+      if (Math.random() > 0.4) {
+        const randomWalk = (Math.random() - 0.5) * 0.012
         historicalPrice = Math.max(84.3, Math.min(85.3, historicalPrice + randomWalk))
       }
 
       this.emit({
         type: 'price_update',
         data: {
-          time: Math.floor(time / 1000),
+          // Use fractional seconds (milliseconds / 1000) for smooth timestamps
+          time: time / 1000,
           value: parseFloat(historicalPrice.toFixed(3)),
         },
         ticker: this.getTickerInfo(historicalPrice),
@@ -92,11 +93,12 @@ class MockWebSocketService {
       this.displayPrice += diff * this.SMOOTHING
     }
 
-    // Emit current price
+    // Emit current price with fractional timestamp
     const message: WebSocketMessage = {
       type: 'price_update',
       data: {
-        time: Math.floor(Date.now() / 1000),
+        // Fractional seconds for smooth movement
+        time: Date.now() / 1000,
         value: parseFloat(this.displayPrice.toFixed(3)),
       },
       ticker: this.getTickerInfo(this.displayPrice),
@@ -109,12 +111,10 @@ class MockWebSocketService {
   }
 
   private generateNewTargetPrice() {
-    // 40% chance to stay at current price
     if (Math.random() < 0.4) return
 
-    // Small, gentle movement
-    const volatility = 0.08
-    const drift = 0.001
+    const volatility = 0.06
+    const drift = 0.0008
     const randomChange = (Math.random() - 0.5) * volatility + drift
 
     this.targetPrice = Math.max(84.2, Math.min(85.6, this.targetPrice + randomChange))
