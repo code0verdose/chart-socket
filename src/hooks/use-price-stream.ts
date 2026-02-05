@@ -17,30 +17,47 @@ export function usePriceStream(): UsePriceStreamReturn {
   const [tickerInfo, setTickerInfo] = useState<TickerInfo | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const priceMapRef = useRef<Map<number, PriceData>>(new Map())
+  const rafIdRef = useRef<number | null>(null)
+  const pendingUpdateRef = useRef<{ price: PriceData; ticker: TickerInfo } | null>(null)
 
-  const handleMessage = useCallback((message: { type: string; data: PriceData; ticker: TickerInfo }) => {
-    if (message.type === 'price_update') {
-      const newPrice = message.data
+  // Throttled update using RAF
+  const scheduleUpdate = useCallback(() => {
+    if (rafIdRef.current !== null) return
 
-      // Use Map to ensure unique timestamps (overwrites if same time)
-      priceMapRef.current.set(newPrice.time, newPrice)
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null
+      
+      const pending = pendingUpdateRef.current
+      if (!pending) return
 
-      // Keep only last 200 points for performance
-      if (priceMapRef.current.size > 200) {
+      const { price, ticker } = pending
+      
+      // Update map
+      priceMapRef.current.set(price.time, price)
+
+      // Keep only last 300 points
+      if (priceMapRef.current.size > 300) {
         const sortedKeys = Array.from(priceMapRef.current.keys()).sort((a, b) => a - b)
-        const keysToDelete = sortedKeys.slice(0, sortedKeys.length - 200)
+        const keysToDelete = sortedKeys.slice(0, sortedKeys.length - 300)
         keysToDelete.forEach(key => priceMapRef.current.delete(key))
       }
 
-      // Convert map to sorted array
+      // Convert to sorted array
       const sortedData = Array.from(priceMapRef.current.values())
         .sort((a, b) => a.time - b.time)
 
       setPriceHistory(sortedData)
-      setLatestPrice(newPrice)
-      setTickerInfo(message.ticker)
-    }
+      setLatestPrice(price)
+      setTickerInfo(ticker)
+    })
   }, [])
+
+  const handleMessage = useCallback((message: { type: string; data: PriceData; ticker: TickerInfo }) => {
+    if (message.type === 'price_update') {
+      pendingUpdateRef.current = { price: message.data, ticker: message.ticker }
+      scheduleUpdate()
+    }
+  }, [scheduleUpdate])
 
   useEffect(() => {
     const priceMap = priceMapRef.current
@@ -58,6 +75,10 @@ export function usePriceStream(): UsePriceStreamReturn {
       mockWebSocket.disconnect()
       setIsConnected(false)
       priceMap.clear()
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
     }
   }, [handleMessage])
 

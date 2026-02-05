@@ -4,39 +4,38 @@ type MessageHandler = (message: WebSocketMessage) => void
 
 class MockWebSocketService {
   private listeners: MessageHandler[] = []
-  private intervalId: NodeJS.Timeout | null = null
-  private currentPrice: number = 84.65
+  private animationId: number | null = null
+  private targetPrice: number = 84.65
+  private displayPrice: number = 84.65
   private priceToBeat: number = 88.46
-  private startTime: number = Date.now()
   private isRunning: boolean = false
+  private lastTimestamp: number = 0
+  private priceChangeTimer: number = 0
   
-  // Stability settings
-  private stableTicks: number = 0
-  private stableTicksRemaining: number = 0
+  // Settings
+  private readonly SMOOTHING = 0.02 // Lower = smoother (0.01-0.05)
+  private readonly PRICE_CHANGE_INTERVAL = 1500 // ms between target price changes
 
   connect() {
     if (this.isRunning) return
 
     this.isRunning = true
-    this.startTime = Date.now()
+    this.lastTimestamp = performance.now()
 
     // Generate initial historical data
     this.generateHistoricalData()
 
-    // Start streaming live data
-    this.intervalId = setInterval(() => {
-      this.generatePriceUpdate()
-    }, 500) // Update every 500ms for smooth animation
+    // Start animation loop
+    this.animate(performance.now())
   }
 
   disconnect() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId)
-      this.intervalId = null
+    if (this.animationId !== null) {
+      cancelAnimationFrame(this.animationId)
+      this.animationId = null
     }
     this.isRunning = false
     this.listeners = []
-    this.stableTicksRemaining = 0
   }
 
   subscribe(handler: MessageHandler) {
@@ -48,73 +47,84 @@ class MockWebSocketService {
 
   private generateHistoricalData() {
     const now = Date.now()
-    const historicalPoints = 50
-    let localStableRemaining = 0
+    const historicalPoints = 150
+    let historicalPrice = 84.65
 
     for (let i = historicalPoints; i >= 0; i--) {
-      const time = now - i * 500
+      const time = now - i * 100
 
-      // Stability logic for historical data
-      if (localStableRemaining > 0) {
-        localStableRemaining--
-      } else {
-        // 30% chance to enter stable period
-        if (Math.random() < 0.3) {
-          localStableRemaining = Math.floor(Math.random() * 5) + 2 // 2-6 ticks stable
-        } else {
-          const randomWalk = (Math.random() - 0.5) * 0.15
-          this.currentPrice = Math.max(84.0, Math.min(86.0, this.currentPrice + randomWalk))
-        }
+      // Gentle random walk for history
+      if (Math.random() > 0.3) {
+        const randomWalk = (Math.random() - 0.5) * 0.015
+        historicalPrice = Math.max(84.3, Math.min(85.3, historicalPrice + randomWalk))
       }
 
       this.emit({
         type: 'price_update',
         data: {
           time: Math.floor(time / 1000),
-          value: parseFloat(this.currentPrice.toFixed(2)),
+          value: parseFloat(historicalPrice.toFixed(3)),
         },
-        ticker: this.getTickerInfo(),
+        ticker: this.getTickerInfo(historicalPrice),
       })
     }
+
+    this.targetPrice = historicalPrice
+    this.displayPrice = historicalPrice
   }
 
-  private generatePriceUpdate() {
-    // Check if we're in a stable period
-    if (this.stableTicksRemaining > 0) {
-      this.stableTicksRemaining--
-    } else {
-      // 25% chance to enter a stable period (price stays the same)
-      if (Math.random() < 0.25) {
-        // Stay stable for 3-8 ticks (1.5s - 4s)
-        this.stableTicksRemaining = Math.floor(Math.random() * 6) + 3
-        this.stableTicks++
-      } else {
-        // Normal price movement
-        const volatility = 0.06
-        const drift = 0.001
-        const randomChange = (Math.random() - 0.5) * volatility + drift
+  private animate = (timestamp: number) => {
+    if (!this.isRunning) return
 
-        this.currentPrice = Math.max(84.0, Math.min(87.0, this.currentPrice + randomChange))
-      }
+    const deltaTime = timestamp - this.lastTimestamp
+    this.lastTimestamp = timestamp
+
+    // Update target price periodically
+    this.priceChangeTimer += deltaTime
+    if (this.priceChangeTimer >= this.PRICE_CHANGE_INTERVAL) {
+      this.priceChangeTimer = 0
+      this.generateNewTargetPrice()
     }
 
+    // Smooth interpolation toward target
+    const diff = this.targetPrice - this.displayPrice
+    if (Math.abs(diff) > 0.0001) {
+      this.displayPrice += diff * this.SMOOTHING
+    }
+
+    // Emit current price
     const message: WebSocketMessage = {
       type: 'price_update',
       data: {
         time: Math.floor(Date.now() / 1000),
-        value: parseFloat(this.currentPrice.toFixed(2)),
+        value: parseFloat(this.displayPrice.toFixed(3)),
       },
-      ticker: this.getTickerInfo(),
+      ticker: this.getTickerInfo(this.displayPrice),
     }
 
     this.emit(message)
+
+    // Continue animation
+    this.animationId = requestAnimationFrame(this.animate)
   }
 
-  private getTickerInfo(): TickerInfo {
-    const priceDiff = this.priceToBeat - this.currentPrice
+  private generateNewTargetPrice() {
+    // 40% chance to stay at current price
+    if (Math.random() < 0.4) return
+
+    // Small, gentle movement
+    const volatility = 0.08
+    const drift = 0.001
+    const randomChange = (Math.random() - 0.5) * volatility + drift
+
+    this.targetPrice = Math.max(84.2, Math.min(85.6, this.targetPrice + randomChange))
+  }
+
+  private getTickerInfo(price: number): TickerInfo {
+    const priceDiff = this.priceToBeat - price
     return {
       priceToBeat: this.priceToBeat,
-      finalPrice: parseFloat(this.currentPrice.toFixed(2)),
+      finalPrice: parseFloat(price.toFixed(2)),
       priceDiff: parseFloat(priceDiff.toFixed(2)),
       isUp: priceDiff < 0,
     }

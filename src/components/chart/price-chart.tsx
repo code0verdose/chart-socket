@@ -13,6 +13,8 @@ export function PriceChart({ data }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const lastDataLengthRef = useRef<number>(0)
+  const isInitializedRef = useRef<boolean>(false)
   const [dotPosition, setDotPosition] = useState<{ x: number; y: number } | null>(null)
 
   const initChart = useCallback(() => {
@@ -50,8 +52,8 @@ export function PriceChart({ data }: PriceChartProps) {
       rightPriceScale: {
         borderVisible: false,
         scaleMargins: {
-          top: 0.15,
-          bottom: 0.15,
+          top: 0.3,
+          bottom: 0.3,
         },
       },
       timeScale: {
@@ -114,38 +116,51 @@ export function PriceChart({ data }: PriceChartProps) {
         chartRef.current = null
         seriesRef.current = null
       }
+      isInitializedRef.current = false
+      lastDataLengthRef.current = 0
     }
   }, [initChart])
 
-  // Update data and dot position
+  // Update data - use update() for incremental changes
   useEffect(() => {
     if (!seriesRef.current || !chartRef.current || data.length === 0) return
 
-    // Deduplicate and sort data by time
-    const uniqueData = data.reduce<PriceData[]>((acc, curr) => {
-      const existingIndex = acc.findIndex(item => item.time === curr.time)
-      if (existingIndex >= 0) {
-        acc[existingIndex] = curr
-      } else {
-        acc.push(curr)
-      }
-      return acc
-    }, [])
+    const lastPoint = data[data.length - 1]
+    
+    // Initial load or significant data change - use setData
+    if (!isInitializedRef.current || data.length < lastDataLengthRef.current) {
+      const uniqueData = data.reduce<PriceData[]>((acc, curr) => {
+        const existingIndex = acc.findIndex(item => item.time === curr.time)
+        if (existingIndex >= 0) {
+          acc[existingIndex] = curr
+        } else {
+          acc.push(curr)
+        }
+        return acc
+      }, [])
 
-    uniqueData.sort((a, b) => a.time - b.time)
+      uniqueData.sort((a, b) => a.time - b.time)
 
-    const chartData: LineData<Time>[] = uniqueData.map(d => ({
-      time: d.time as Time,
-      value: d.value,
-    }))
+      const chartData: LineData<Time>[] = uniqueData.map(d => ({
+        time: d.time as Time,
+        value: d.value,
+      }))
 
-    seriesRef.current.setData(chartData)
+      seriesRef.current.setData(chartData)
+      isInitializedRef.current = true
+    } else {
+      // Incremental update - just update the last point
+      seriesRef.current.update({
+        time: lastPoint.time as Time,
+        value: lastPoint.value,
+      })
+    }
 
-    // Calculate dot position for the last data point
-    const lastPoint = uniqueData[uniqueData.length - 1]
-    if (lastPoint && seriesRef.current) {
+    lastDataLengthRef.current = data.length
+
+    // Update dot position
+    if (lastPoint) {
       const timeScale = chartRef.current.timeScale()
-      
       const x = timeScale.timeToCoordinate(lastPoint.time as Time)
       const y = seriesRef.current.priceToCoordinate(lastPoint.value)
       
@@ -164,7 +179,7 @@ export function PriceChart({ data }: PriceChartProps) {
       {/* Animated pulsing dot at the end of the line */}
       {dotPosition && (
         <div
-          className="absolute pointer-events-none w-6 h-6"
+          className="absolute pointer-events-none w-6 h-6 transition-all duration-100 ease-linear"
           style={{
             left: `${dotPosition.x}px`,
             top: `${dotPosition.y}px`,
